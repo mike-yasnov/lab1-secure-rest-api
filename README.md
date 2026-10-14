@@ -1,178 +1,93 @@
-# Secure REST API с интеграцией в CI/CD
+# Информационная безопасность
 
-REST API на FastAPI: четыре рабочих эндпоинта, защита от SQL-инъекций, XSS и
-уязвимостей аутентификации, плюс конвейер CI/CD, который на каждый push
-прогоняет статический анализ кода, проверку зависимостей и тесты.
+## Лабораторная работа №1
 
-Проект сделан по дисциплине **«Информационная безопасность»** (Университет ИТМО),
-работа №1. Закрывает три пункта **OWASP Top 10**:
+«Разработка защищённого REST API с интеграцией в CI/CD»
 
-- A03:2021 — Injection (SQL-инъекции и XSS);
-- A07:2021 — Identification and Authentication Failures (уязвимости аутентификации).
+### Стек
 
----
+- Python 3.12 / FastAPI
+- SQLAlchemy + SQLite
+- JWT (PyJWT), bcrypt
+- pytest, Bandit (SAST), pip-audit (SCA)
+- GitHub Actions
 
-## Стек технологий
+### Описание API
 
-| Компонент | Технология |
-|-----------|-----------|
-| Язык | Python 3.12+ |
-| Веб-фреймворк | FastAPI |
-| ORM / БД | SQLAlchemy + SQLite |
-| Аутентификация | JWT (PyJWT) |
-| Хэширование паролей | bcrypt |
-| Тесты | pytest |
-| SAST | Bandit |
-| SCA | pip-audit |
-| CI/CD | GitHub Actions |
-
----
-
-
-## Установка и запуск
-
-```bash
-# 1. Клонировать репозиторий
-git clone https://github.com/mike-yasnov/lab1-secure-rest-api.git
-cd lab1-secure-rest-api
-
-# 2. Создать виртуальное окружение и поставить зависимости
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements-dev.txt
-
-# 3. Задать секрет для подписи JWT
-export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-
-# 4. Запустить сервер
-uvicorn app.main:app --reload
+`POST /auth/register`: регистрация пользователя (принимает логин и пароль).
+```json
+{
+  "username": "mike",
+  "password": "S3curePass!"
+}
 ```
 
-После запуска доступны:
-
-- API: <http://127.0.0.1:8000>
-- Интерактивная документация Swagger UI: <http://127.0.0.1:8000/docs>
-
----
-
-## Описание API
-
-| Метод | Эндпоинт | Аутентификация | Назначение |
-|-------|----------|:--------------:|-----------|
-| `POST` | `/auth/register` | — | Регистрация пользователя |
-| `POST` | `/auth/login` | — | Вход, выдача JWT-токена |
-| `GET` | `/api/data` | **JWT** | Получить список постов |
-| `POST` | `/api/posts` | **JWT** | Создать пост |
-| `GET` | `/health` | — | Проверка доступности |
-
-### Примеры вызовов (curl)
-
-Регистрация:
-
-```bash
-curl -X POST http://127.0.0.1:8000/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"mike","password":"S3curePass!"}'
+`POST /auth/login`: аутентификация пользователя, возвращает JWT-токен.
+```json
+{
+  "username": "mike",
+  "password": "S3curePass!"
+}
 ```
 
-Вход и получение токена:
+`GET /api/data`: получение списка постов. Доступ только у аутентифицированных
+пользователей (заголовок `Authorization: Bearer <token>`).
 
-```bash
-curl -X POST http://127.0.0.1:8000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"mike","password":"S3curePass!"}'
-# -> {"access_token":"<JWT>","token_type":"bearer"}
+`POST /api/posts`: создание поста. Доступ только у аутентифицированных пользователей.
+```json
+{
+  "title": "Заголовок",
+  "content": "Текст поста"
+}
 ```
 
-Создание поста с токеном:
+### Описание реализованных мер защиты
 
-```bash
-curl -X POST http://127.0.0.1:8000/api/posts \
-  -H "Authorization: Bearer <JWT>" \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Заголовок","content":"Текст поста"}'
-```
-
-Без токена защищённый эндпоинт отдаёт 401:
-
-```bash
-curl -i http://127.0.0.1:8000/api/data           # HTTP 401 Unauthorized
-curl http://127.0.0.1:8000/api/data -H "Authorization: Bearer <JWT>"   # 200 OK
-```
-
----
-
-## Меры защиты
-
-### Защита от SQL-инъекций
-
-Все запросы к базе идут через ORM SQLAlchemy, значения подставляются
-параметрами. Конкатенации строк в SQL нет нигде. Поиск пользователя выглядит так:
+- От **SQLi** код защищён с помощью ORM SQLAlchemy: запросы параметризуются,
+  конкатенации строк в SQL нет. Логин дополнительно валидируется по `[A-Za-z0-9_]`.
 
 ```python
 db.query(User).filter(User.username == payload.username).first()
 ```
 
-SQLAlchemy сам экранирует `payload.username`, поэтому ввод `' OR 1=1 --` попадёт
-в запрос обычной строкой и командой уже не станет. Вдобавок Pydantic-схема
-пропускает в логине лишь символы `[A-Za-z0-9_]`, так что спецсимволы отсекаются
-ещё до обращения к базе.
-
-### Защита от XSS
-
-Заголовок и текст поста экранируются перед записью функцией `sanitize()`
-([app/sanitize.py](app/sanitize.py)) поверх `html.escape`:
+- От **XSS** код защищён экранированием пользовательских данных (`html.escape`)
+  перед сохранением и выдачей.
 
 ```python
-Post(title=sanitize(payload.title), content=sanitize(payload.content), ...)
+Post(title=sanitize(payload.title), content=sanitize(payload.content))
 ```
 
-Нагрузка `<script>alert(1)</script>` сохранится как
-`&lt;script&gt;alert(1)&lt;/script&gt;` и не выполнится у клиента, который рисует
-ответ как HTML.
+- От **Broken Authentication**: пароли хранятся bcrypt-хэшем со случайной добавкой,
+  уникальной для каждого пароля; вход выдаёт подписанный JWT (HS256, срок жизни
+  30 минут); защищённые эндпоинты проверяет middleware `get_current_user`; секрет
+  подписи берётся из переменной окружения `SECRET_KEY`.
 
-### Защита от уязвимостей аутентификации
+```python
+password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+```
 
-- пароли хранятся только bcrypt-хэшем со случайной добавкой, уникальной для
-  каждого пароля; при входе сверка идёт через `bcrypt.checkpw` за постоянное время;
-- после входа сервер выдаёт подписанный JWT (HS256) со сроком жизни 30 минут;
-- зависимость `get_current_user` проверяет подпись и срок токена на всех
-  защищённых эндпоинтах; если токена нет или он просрочен, сервер отвечает 401;
-- секрет подписи читается из переменной окружения `SECRET_KEY`, в коде его нет.
+### Отчёты из pipeline
 
----
+Конфиг конвейера — [.github/workflows/ci.yml](.github/workflows/ci.yml). Запускается
+на каждый push и pull request: Bandit (SAST), pip-audit (SCA), pytest.
 
-## Конвейер CI/CD (GitHub Actions)
-
-Конфиг лежит в [.github/workflows/ci.yml](.github/workflows/ci.yml). Запускается
-на каждый push и pull request, три шага:
-
-1. Bandit — статический анализ исходного кода на уязвимости (SAST);
-2. pip-audit — проверка зависимостей на известные уязвимости, CVE (SCA);
-3. pytest — функциональные тесты API.
-
-Любая найденная уязвимость или упавший тест красит прогон в красный.
-
-### Скриншоты отчётов SAST/SCA (вкладка Actions)
-
-Общий результат прогона, все шаги зелёные:
-
-![Обзор прогона CI](docs/screenshots/actions-overview.png)
-
-Шаг SAST (Bandit), уязвимостей не найдено:
+Bandit (SAST), уязвимостей не найдено:
 
 ![SAST Bandit](docs/screenshots/bandit-step.png)
 
-Шаг SCA (pip-audit), уязвимых зависимостей не найдено:
+pip-audit (SCA), уязвимых зависимостей не найдено:
 
 ![SCA pip-audit](docs/screenshots/pip-audit-step.png)
 
-Шаг тестов (pytest), все тесты пройдены:
+pytest, все тесты пройдены:
 
 ![Тесты pytest](docs/screenshots/tests-step.png)
 
----
+Обзор прогона в разделе Actions, статус Success:
 
-## Автор
+![Обзор прогона CI](docs/screenshots/actions-overview.png)
 
-Яснов Михаил Андреевич, группа Р3417.
+### Последний запуск пайплайна
+
+https://github.com/mike-yasnov/lab1-secure-rest-api/actions/runs/35115503803
