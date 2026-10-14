@@ -90,4 +90,4 @@ pytest, все тесты пройдены:
 
 ### Последний запуск пайплайна
 
-https://github.com/mike-yasnov/lab1-secure-rest-api/actions/runs/35115503803
+https://github.com/mike-yasnov/lab1-secure-rest-api/actions/runs/38555928263
